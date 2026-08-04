@@ -1,9 +1,9 @@
 from torch.utils.data import Dataset, DataLoader
 from transformers import logging, AutoProcessor
-from torchcodec.decoders import AudioDecoder
 
 import numpy as np
 import librosa
+import soundfile as sf
 from pathlib import Path
 import json
 from typing import List, Dict
@@ -11,45 +11,59 @@ from typing import List, Dict
 from .schema import SingleSegment
 from .utils import collect_all_best_audios, extract_audio_from_video
 
-logger = logging.get_logger(__name__)
 
-def read_audio(ele: dict, sampling_rate: int):
-    audio_decoder = AudioDecoder(source=ele['Audio Path'], sample_rate=sampling_rate)
-    audio_sr = audio_decoder.metadata.sample_rate
-    audio_duration = audio_decoder.metadata.duration_seconds_from_header
-    total_frames = int(audio_duration*audio_sr)
-    audio_pts = np.linspace(1/audio_sr, audio_duration, total_frames)
-    audio_start = ele.get("start", None)
-    audio_end = ele.get("end", None)
-    clip_idxs = None
-    if audio_start is not None or audio_end is not None:
-        audio_start = audio_pts[0] if not audio_start else audio_start
-        audio_end = audio_pts[-1] if not audio_end else audio_end
-        clip_idxs = ((audio_start <= audio_pts) & (audio_pts <= audio_end)).nonzero()[0]
-        clip_pts = audio_pts[clip_idxs]
-        total_frames = len(clip_pts)
-    else:
-        audio_start = 0
+def read_audio(ele: dict):
+    path = ele["audio"]
+
+    # 1. 读取音频，不走 torchcodec
+    wav, orig_sr = sf.read(path, dtype="float32")
+
+    # stereo / multi-channel -> mono
+    if wav.ndim > 1:
+        wav = wav.mean(axis=1)
+
+    audio_duration = len(wav) / orig_sr
+
+    audio_start = ele.get("audio_start", None)
+    audio_end = ele.get("audio_end", None)
+
+    if audio_start is None:
+        audio_start = 0.0
+    if audio_end is None:
         audio_end = audio_duration
-        
-    nframes = int(total_frames/audio_sr*sampling_rate)
-    nframes_idxs = np.linspace(0, total_frames - 1, nframes).round().astype(int)
-    clip_idxs = nframes_idxs if clip_idxs is None else clip_idxs[nframes_idxs]
-    clip_pts = audio_pts[clip_idxs]
-    clip = audio_decoder.get_samples_played_in_range(start_seconds=audio_start, stop_seconds=audio_end+1/sampling_rate).data.squeeze(0)
-    
+
+    # 防止越界
+    audio_start = max(0.0, float(audio_start))
+    audio_end = min(float(audio_end), audio_duration)
+
+    if audio_end <= audio_start:
+        # 避免空音频
+        audio_end = min(audio_start + 1.0 / orig_sr, audio_duration)
+
+    # 2. 先在原采样率下裁剪
+    start_sample = int(round(audio_start * orig_sr))
+    end_sample = int(round(audio_end * orig_sr))
+    clip = wav[start_sample:end_sample]
+
+    # 3. 重采样到 DEFAULT_SAMPLE_RATE
+    if orig_sr != DEFAULT_SAMPLE_RATE:
+        clip = librosa.resample(
+            clip,
+            orig_sr=orig_sr,
+            target_sr=DEFAULT_SAMPLE_RATE,
+        )
+        audio_sr = DEFAULT_SAMPLE_RATE
+    else:
+        audio_sr = orig_sr
+
+    # 4. 构造 clip_pts，对应重采样后的每个 sample 的原始时间戳
+    nframes = len(clip)
+    clip_pts = audio_start + np.arange(nframes) / DEFAULT_SAMPLE_RATE
+
+    clip = torch.from_numpy(clip).float()
+
     return clip, clip_pts, audio_sr
 
-class VideoDatasetForSegment(Dataset):
-    def __init__(self, dir, target_sr=16000):
-        super().__init__()
-        self.video_files = list(Path(dir).glob("*.mp4"))
-        self.target_sr = target_sr
-        
-    def __getitem__(self, index):
-        video_file = self.video_files[index]
-        audio_clip = extract_audio_from_video(video_file, sample_rate=self.target_sr)
-        return str(video_file), audio_clip, self.target_sr
 
 class AudioDatasetForsegment(Dataset):
     def __init__(self, audio_dir, target_sr=16000):
