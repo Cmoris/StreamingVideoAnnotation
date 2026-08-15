@@ -1,3 +1,6 @@
 __pycache__
 *.jsonl
 *.mp4
+*.wav
+results
+sources

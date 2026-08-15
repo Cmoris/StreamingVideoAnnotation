@@ -6,6 +6,7 @@ from transformers import WhisperProcessor, WhisperForConditionalGeneration, Whis
 from qwen_asr import Qwen3ASRModel
 
 
+
 class WhisperASR:
     def __init__(
         self,
@@ -33,13 +34,11 @@ class WhisperASR:
         )
 
     @torch.no_grad()
-    def transcribe(self, waveforms: List[Tuple[np.ndarray, int]]) -> List[str]:
+    def transcribe(self, audio: List[Tuple[np.ndarray, int]]) -> List[str]:
         waves, srs = [], []
-        for waveform, sr in waveforms:
+        for waveform, sr in audio:
             waves.append(waveform)
             srs.append(sr)
-        
-        waves = torch.stack(waves, dim=0)
         
         inputs = self.processor(
             waves,
@@ -59,7 +58,8 @@ class WhisperASR:
             predicted_ids, skip_special_tokens=True
         )
 
-        return texts
+        languages = [self.language or "unknown"] * len(texts)
+        return texts, languages
     
     def detect_language(self, audio: np.ndarray) -> str:
         inputs = self.processor(
@@ -71,10 +71,9 @@ class WhisperASR:
         with torch.no_grad():
             predicted_ids = self.model.generate(
                 inputs.input_features,
-                max_new_tokens=1  # 只生成语言 token
+                max_new_tokens=1  
             )
 
-        # 解码第一个生成的 token 即为语言
         lang_token = self.processor.tokenizer.decode(predicted_ids[0][1])  # [0]=<|startoftranscript|>
         return lang_token
     
@@ -82,8 +81,10 @@ class WhisperASR:
 class QwenASR:
     def __init__(self, 
                  model_name="Qwen/Qwen3-ASR-1.7B", 
-                 language=None, 
+                 language="Japanese", 
                  device="cuda:0"):
+        if Qwen3ASRModel is None:
+            raise ImportError("QwenASR requires the optional 'qwen-asr' package")
         self.model = Qwen3ASRModel.from_pretrained(
             model_name,
             dtype=torch.bfloat16,
@@ -96,10 +97,13 @@ class QwenASR:
         self.language = language
         
     def transcribe(self, audio: List[Tuple[np.ndarray, int]]) -> List[str]:
-        results = self.model.transcribe(
-            audio=audio,
-            language=self.language,
-        )
+        try:
+            results = self.model.transcribe(
+                audio=audio,
+                language=self.language,
+            )
+        except:
+            breakpoint()
         texts = [result.text for result in results]
         languages = [result.language for result in results]
         
@@ -123,4 +127,3 @@ if __name__ == "__main__":
         segment_waveform = waveform[start_sample:end_sample]
         results = asr.generate([[0, start_sample/16000, end_sample/16000, segment_waveform]])
         print(results)
-

@@ -1,5 +1,6 @@
-from audio import *
-from data.dataset import AudioDatasetForsegment
+from audio.vad_model import VAD
+from audio.env_model import EnvDetect
+from data.dataset import AudioDatasetForSegment
 from data.collator import DataCollatorForAudio
 from data.utils import extract_bv_id_from_dir
 
@@ -64,22 +65,19 @@ class VADSegment:
             device=self.device
         )
 
-        self.audio_dataset = AudioDatasetForsegment(
+        self.audio_dataset = AudioDatasetForSegment(
             audio_dir=audio_dir,
             target_sr=sampling_rate,
         )
         
-        sampler = torch.utils.data.DistributedSampler(
+        rank_dataset = torch.utils.data.Subset(
             self.audio_dataset,
-            num_replicas=world_size,
-            rank=rank,
-            shuffle=False,
+            range(rank, len(self.audio_dataset), world_size),
         )
         
         self.audio_loader = torch.utils.data.DataLoader(
-            self.audio_dataset,
+            rank_dataset,
             batch_size=batch_size,
-            sampler=sampler,
             shuffle=False,
             num_workers=16,
             collate_fn=DataCollatorForAudio(),
@@ -95,7 +93,12 @@ class VADSegment:
             nonlocal f, lengths, current_key
             if f is None:
                 return
-            seeks = [0] + torch.tensor(lengths).cumsum(0).tolist()[:-1]
+            
+            seeks = (
+                [0] + torch.tensor(lengths, dtype=torch.long).cumsum(0).tolist()[:-1]
+                if lengths else []
+            )
+            
             print(f"Finished writing {current_key}, total segments: {len(lengths)}")
             f.write(json.dumps(seeks, ensure_ascii=False))
             f.close()
@@ -118,26 +121,18 @@ class VADSegment:
                     min_speech_duration_ms=self.min_speech_duration_ms
                 )
 
-                """
-                添加了切分环境音和底噪的逻辑
-                在jsonl里加了一个字段标注这段音频的属性
-                环境音检测基于 Log-Mel 频谱与 Spectral Flux
-                底噪直接使用滑动窗口切分
-                底噪和环境音和语音分段互不重合
-                优先级：语音>环境音>底噪
-                """
                 
                 env_segments, filtered_bg_segments = self.env_model.generate(waveform, speech_segment)
 
                 all_results = []
                 for s, e in speech_segment:
-                    all_results.append({"Type": "speech", "Audio Path":audio_path, "Start": s, "End": e})
+                    all_results.append({"type": "speech", "audio_path": audio_path, "start": s, "end": e})
                 for s, e in env_segments:
-                    all_results.append({"Type": "environment_event", "Audio Path":audio_path, "Start": s, "End": e})
+                    all_results.append({"type": "environment_event", "audio_path": audio_path, "start": s, "end": e})
                 for s, e in filtered_bg_segments:
-                    all_results.append({"Type": "background_ambience", "Audio Path":audio_path, "Start": s, "End": e})
+                    all_results.append({"type": "background_ambience", "audio_path": audio_path, "start": s, "end": e})
                 
-                all_results.sort(key=lambda x: x['Start'])
+                all_results.sort(key=lambda x: x['start'])
                 
                 key = f"{extract_bv_id_from_dir(Path(audio_path).parent.stem)}_{Path(audio_path).stem}.rank{self.local_rank}"
 
@@ -151,7 +146,7 @@ class VADSegment:
                 
                 for results in all_results:
                     line = json.dumps(results, ensure_ascii=True) + "\n"
-                    lengths.append(len(line))
+                    lengths.append(len(line.encode("utf-8")))
                     f.write(line)
 
         close_file()

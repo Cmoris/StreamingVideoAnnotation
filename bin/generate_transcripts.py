@@ -4,7 +4,7 @@ import os
 import torch
 import json
 
-from audio import *
+from audio.asr_model import WhisperASR, QwenASR
 from data.dataset import AudioDatasetForASR
 from data.collator import DataCollatorForASR
 from data.utils import extract_bv_id_from_dir
@@ -64,7 +64,7 @@ class AnnotationAudio:
         if "whisper" in asr_model_dir.lower():
             self.asr_model = WhisperASR(
                 model_name=asr_model_dir,
-                language="chinese",
+                language="ja",
                 device=self.device,
             )
             
@@ -76,19 +76,16 @@ class AnnotationAudio:
             
         segments_dataset = AudioDatasetForASR(annotation_dir=annotation_dir, target_sr=target_sr)
         
-        sampler = torch.utils.data.DistributedSampler(
+        rank_dataset = torch.utils.data.Subset(
             segments_dataset,
-            num_replicas=world_size,
-            rank=local_rank,
-            shuffle=False,
+            range(local_rank, len(segments_dataset), world_size),
         )
         
         self.segments_loader = torch.utils.data.DataLoader(
-            segments_dataset,
+            rank_dataset,
             batch_size=batch_size,
-            sampler=sampler,
             shuffle=False,
-            num_workers=4,
+            num_workers=8,
             collate_fn=DataCollatorForASR(),
             pin_memory=True,
         )
@@ -102,22 +99,29 @@ class AnnotationAudio:
             nonlocal f, lengths, current_key
             if f is None:
                 return
-            seeks = [0] + torch.tensor(lengths).cumsum(0).tolist()[:-1]
-            f.write(json.dumps(seeks, ensure_ascii=False))
+            seeks = (
+                [0] + torch.tensor(lengths, dtype=torch.long).cumsum(0).tolist()[:-1]
+                if lengths else []
+            )
+            f.write(json.dumps(seeks, ensure_ascii=True))
             f.close()
             f = None
 
         for batch in self.segments_loader:
             types = batch["type"]
-            is_speech = torch.tensor([t == "speech" for t in types]).tolist()
-            if is_speech.count(True) == 0:
+            is_speech = torch.tensor([t == "speech" for t in types], dtype=torch.bool)
+            if not is_speech.any():
                 continue
             waveforms = batch["waveforms"][is_speech]
             srs = batch["sampling_rate"][is_speech]
             starts = batch["start"][is_speech]
             ends = batch["end"][is_speech]
             audio_paths = [batch["audio_path"][i] for i in range(len(is_speech)) if is_speech[i]]
-            inputs = [(w.cpu().numpy(), sr) for w, sr in zip(waveforms, srs)]
+            masks = batch["attention_mask"][is_speech]
+            inputs = [
+                (w[: int(mask.sum())].cpu().numpy(), int(sr.item()))
+                for w, mask, sr in zip(waveforms, masks, srs)
+            ]
             texts, languages = self.asr_model.transcribe(
                 audio=inputs
             )
@@ -145,7 +149,7 @@ class AnnotationAudio:
                     ensure_ascii=False,
                 ) + "\n"
 
-                lengths.append(len(line))
+                lengths.append(len(line.encode("utf-8")))
                 f.write(line)
 
         close_file()

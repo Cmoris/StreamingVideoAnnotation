@@ -1,2 +1,2 @@
 from .collator import DataCollatorForAudio, DataCollatorForASR, DataCollatorForCaption, DataCollatorForTranscripts
-from .dataset import AudioDatasetForsegment, AudioDatasetForASR, AudioDatasetForCaption, TranscriptDataset
+from .dataset import AudioDatasetForSegment, AudioDatasetForASR, AudioDatasetForCaption, TranscriptDataset

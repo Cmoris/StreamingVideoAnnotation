@@ -4,7 +4,7 @@ import os
 import torch
 import json
 
-from audio import *
+from audio.sed_model import Qwen3OmniCaptioner
 from data.dataset import AudioDatasetForASR
 from data.collator import DataCollatorForASR
 from data.utils import extract_bv_id_from_dir
@@ -64,21 +64,19 @@ class AnnotationAudio:
         
         self.sed_model = Qwen3OmniCaptioner(
                 model_name=sed_model_dir,
+                device=self.device,
             )
 
         segments_dataset = AudioDatasetForASR(annotation_dir=annotation_dir, target_sr=target_sr)
         
-        sampler = torch.utils.data.DistributedSampler(
+        rank_dataset = torch.utils.data.Subset(
             segments_dataset,
-            num_replicas=world_size,
-            rank=local_rank,
-            shuffle=False,
+            range(local_rank, len(segments_dataset), world_size),
         )
         
         self.segments_loader = torch.utils.data.DataLoader(
-            segments_dataset,
+            rank_dataset,
             batch_size=batch_size,
-            sampler=sampler,
             shuffle=False,
             num_workers=4,
             collate_fn=DataCollatorForASR(),
@@ -94,25 +92,35 @@ class AnnotationAudio:
             nonlocal f, lengths, current_key
             if f is None:
                 return
-            seeks = [0] + torch.tensor(lengths).cumsum(0).tolist()[:-1]
+            seeks = (
+                [0] + torch.tensor(lengths, dtype=torch.long).cumsum(0).tolist()[:-1]
+                if lengths else []
+            )
             f.write(json.dumps(seeks, ensure_ascii=False))
             f.close()
             f = None
 
         for batch in self.segments_loader:
             types = batch["type"]
-            is_speech = torch.tensor([t == "speech" for t in types], device=waveforms.device)
+            is_speech = torch.tensor([t == "speech" for t in types], dtype=torch.bool)
             is_env = ~is_speech
+            if not is_env.any():
+                continue
             env_types = [t for t, is_s in zip(types, is_speech.tolist()) if not is_s]
             waveforms = batch["waveforms"][is_env]
+            masks = batch["attention_mask"][is_env]
             starts = batch["start"][is_env]
             ends = batch["end"][is_env]
             audio_paths = [batch["audio_path"][i] for i in range(len(is_env)) if is_env[i]]
             
-            texts = self.sed_model.generate(waveforms, env_types)
+            unpadded_waveforms = [
+                waveform[: int(mask.sum())].cpu().numpy()
+                for waveform, mask in zip(waveforms, masks)
+            ]
+            texts = self.sed_model.generate(unpadded_waveforms, env_types)
 
-            for path, start, end, text in zip(
-                audio_paths, starts, ends, texts
+            for path, start, end, text, env_type in zip(
+                audio_paths, starts, ends, texts, env_types
             ):
                 key = f"{extract_bv_id_from_dir(Path(path).parent.stem)}_{Path(path).stem}.rank{self.local_rank}"
 
@@ -127,6 +135,7 @@ class AnnotationAudio:
                 line = json.dumps(
                     {
                         "audio_path": path,
+                        "type": env_type,
                         "start": start.item() / self.target_sr,
                         "end": end.item() / self.target_sr,
                         "text": text.strip(),
@@ -134,7 +143,7 @@ class AnnotationAudio:
                     ensure_ascii=False,
                 ) + "\n"
 
-                lengths.append(len(line))
+                lengths.append(len(line.encode("utf-8")))
                 f.write(line)
 
         close_file()

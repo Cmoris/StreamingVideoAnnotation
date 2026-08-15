@@ -59,8 +59,8 @@ def merge_rank_jsonls(
     lengths = []
     with open(output_path, "w", encoding="utf-8") as f:
         for seg in segments:
-            line = json.dumps(seg, ensure_ascii=True) + "\n"
-            lengths.append(len(line))
+            line = json.dumps(seg, ensure_ascii=False) + "\n"
+            lengths.append(len(line.encode("utf-8")))
             f.write(line)
 
         seeks = [0]

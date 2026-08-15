@@ -11,7 +11,7 @@ class DataCollatorForVideo:
         """
         batch: List[(waveform, sr)]
         """
-        waveforms = [torch.from_numpy(w).float() for _, w, _ in batch]
+        waveforms = [torch.as_tensor(w, dtype=torch.float32) for _, w, _ in batch]
         srs = [torch.tensor(sr, dtype=torch.long) for _, _, sr in batch]
         audio_paths = [a for a, _, _ in batch]
         lengths = torch.tensor([w.size(0) for w in waveforms], dtype=torch.long)
@@ -52,7 +52,7 @@ class DataCollatorForAudio:
         """
         batch: List[(waveform, sr)]
         """
-        waveforms = [torch.from_numpy(w).float() for _, w, _ in batch]
+        waveforms = [torch.as_tensor(w, dtype=torch.float32) for _, w, _ in batch]
         srs = [torch.tensor(sr, dtype=torch.long) for _, _, sr in batch]
         audio_paths = [a for a, _, _ in batch]
         lengths = torch.tensor([w.size(0) for w in waveforms], dtype=torch.long)
@@ -98,10 +98,10 @@ class DataCollatorForASR:
         """
         features: List of dataset outputs
         """
-        waveforms = [f["waveform"] for f in features]
+        waveforms = [torch.as_tensor(f["waveform"], dtype=torch.float32) for f in features]
         srs = [torch.tensor(f["sr"], dtype=torch.long) for f in features]
-        starts = [torch.tensor(f["start"], dtype=torch.float32) for f in features]
-        ends = [torch.tensor(f["end"], dtype=torch.float32) for f in features]
+        starts = [torch.tensor(f["start"], dtype=torch.long) for f in features]
+        ends = [torch.tensor(f["end"], dtype=torch.long) for f in features]
 
         lengths = torch.tensor([len(w) for w in waveforms], dtype=torch.long)
         max_len = lengths.max().item()
@@ -210,7 +210,7 @@ class DataCollatorForCaption:
         feature_attention_mask = [f["feature_attention_mask"].squeeze(0) for f in features]
         
         batch_size = len(input_features)
-        lengths = torch.tensor([features.size(1) for features in input_features], dtype=torch.long)
+        lengths = torch.tensor([feature.size(1) for feature in input_features], dtype=torch.long)
         dim = input_features[0].size(0)
         max_len = lengths.max().item()
         

@@ -15,7 +15,7 @@ class Qwen3OmniCaptioner:
         self.model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
             model_name,
             dtype="auto",
-            device_map="auto",
+            device_map=device,
             trust_remote_code=True
         ).eval()
         

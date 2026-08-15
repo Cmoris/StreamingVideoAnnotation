@@ -20,7 +20,22 @@ def add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--output-path",
         type=str,
-        default="./results/transcripts"
+        default=None,
+        help="单文件模式的输出 .ass 路径",
+    )
+
+    parser.add_argument(
+        "--input-dir",
+        type=str,
+        default=None,
+        help="批量模式：generate_transcripts.py 生成的 JSONL 文件目录",
+    )
+
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="./results/subtitles",
+        help="批量模式的 ASS 输出目录",
     )
     
     parser.add_argument(
@@ -63,11 +78,24 @@ class SubtitleGenerator:
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
-                for line_num, line in enumerate(lines[:-1]):
+                for line_num, line in enumerate(lines, start=1):
                     line = line.strip()
                     if line:  # 跳过空行
                         try:
                             subtitle = json.loads(line)
+                            # generate_transcripts.py 会在文件末尾写入字节偏移列表，
+                            # 它不是字幕数据，应当忽略。这样也兼容不带索引的普通 JSONL。
+                            if isinstance(subtitle, list):
+                                if line_num != len(lines):
+                                    raise ValueError(
+                                        f"第{line_num}行出现了非末尾的索引列表"
+                                    )
+                                continue
+                            if not isinstance(subtitle, dict):
+                                raise ValueError(
+                                    f"第{line_num}行应为JSON对象，实际为"
+                                    f"{type(subtitle).__name__}"
+                                )
                             subtitles.append(subtitle)
                         except json.JSONDecodeError as e:
                             raise json.JSONDecodeError(
@@ -153,6 +181,30 @@ class SubtitleGenerator:
         except Exception as e:
             raise Exception(f"生成字幕文件失败: {str(e)}")
 
+    def generate_batch(self,
+                       input_dir: Union[str, Path],
+                       output_dir: Union[str, Path]) -> int:
+        """将目录中 generate_transcripts.py 生成的所有 JSONL 转为 ASS。"""
+        input_dir = Path(input_dir)
+        if not input_dir.is_dir():
+            raise NotADirectoryError(f"输入目录不存在: {input_dir}")
+
+        jsonl_files = sorted(input_dir.glob("*.jsonl"))
+        if not jsonl_files:
+            raise FileNotFoundError(f"输入目录中没有 JSONL 文件: {input_dir}")
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for jsonl_file in jsonl_files:
+            self.generate_subtitle(
+                cn_file=None,
+                ja_file=jsonl_file,
+                output_path=output_dir / f"{jsonl_file.stem}.ass",
+            )
+
+        print(f"批量处理完成: {len(jsonl_files)} 个文件")
+        return len(jsonl_files)
+
 
 def save_subtitle():
     """
@@ -174,7 +226,18 @@ def save_subtitle():
     add_arguments(parser)
     args = parser.parse_args()
     generator = SubtitleGenerator(fontsize=args.fontsize)
-    generator.generate_subtitle(args.cn_file, args.ja_file, args.output_path)
+    if args.input_dir:
+        if args.cn_file or args.ja_file or args.output_path:
+            parser.error("--input-dir 不能与 --cn-file/--ja-file/--output-path 同时使用")
+        generator.generate_batch(args.input_dir, args.output_dir)
+    else:
+        if not args.cn_file and not args.ja_file:
+            parser.error("单文件模式需要 --cn-file 或 --ja-file；批量模式使用 --input-dir")
+        output_path = args.output_path
+        if output_path is None:
+            source_file = args.cn_file or args.ja_file
+            output_path = Path(args.output_dir) / f"{Path(source_file).stem}.ass"
+        generator.generate_subtitle(args.cn_file, args.ja_file, output_path)
 
 
 # 使用示例

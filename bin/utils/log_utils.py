@@ -17,7 +17,7 @@ def setup_logging(
         level: Logging level (debug, info, warning, error, critical). Default: info
         log_file: Optional path to log file. If None, logs only to console.
     """
-    logger = logging.getLogger("whisperx")
+    logger = logging.getLogger("annotation")
 
     logger.handlers.clear()
 
