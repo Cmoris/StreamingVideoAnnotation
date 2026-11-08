@@ -17,6 +17,8 @@ class DataArguments:
     output_dir: str = "./outputs"
     batch_size: int= 4
     sampling_rate: int = 16000
+    num_workers: int = 0
+    device: str = None
     
 @dataclass
 class ModelArguments:
@@ -39,10 +41,14 @@ class VADSegment:
         min_speech_duration_ms=500,
         rank: int = 0,
         world_size: int = 1,
+        local_rank: int = None,
+        num_workers: int = 0,
+        device: str = None,
     ):
         self.local_rank = rank
         self.world_size = world_size
-        self.device = f"cuda:{rank}"
+        local_rank = rank if local_rank is None else local_rank
+        self.device = device or f"cuda:{local_rank}"
 
         self.audio_dir = Path(audio_dir)
         self.output_dir = Path(output_dir)
@@ -53,7 +59,8 @@ class VADSegment:
         self.min_silence_duration_ms = min_silence_duration_ms
         self.min_speech_duration_ms = min_speech_duration_ms
 
-        torch.cuda.set_device(rank)
+        if self.device.startswith("cuda"):
+            torch.cuda.set_device(self.device)
 
         self.vad_model = VAD(
             model_dir=model_dir,
@@ -79,7 +86,7 @@ class VADSegment:
             rank_dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=16,
+            num_workers=num_workers,
             collate_fn=DataCollatorForAudio(),
             pin_memory=True,
         )
@@ -100,7 +107,7 @@ class VADSegment:
             )
             
             print(f"Finished writing {current_key}, total segments: {len(lengths)}")
-            f.write(json.dumps(seeks, ensure_ascii=False))
+            f.write(json.dumps(seeks, ensure_ascii=False).encode("utf-8"))
             f.close()
             f = None
         
@@ -126,11 +133,11 @@ class VADSegment:
 
                 all_results = []
                 for s, e in speech_segment:
-                    all_results.append({"type": "speech", "audio_path": audio_path, "start": s, "end": e})
+                    all_results.append({"type": "speech", "audio_path": audio_path, "start": s, "end": e, "sampling_rate": self.sampling_rate})
                 for s, e in env_segments:
-                    all_results.append({"type": "environment_event", "audio_path": audio_path, "start": s, "end": e})
+                    all_results.append({"type": "environment_event", "audio_path": audio_path, "start": s, "end": e, "sampling_rate": self.sampling_rate})
                 for s, e in filtered_bg_segments:
-                    all_results.append({"type": "background_ambience", "audio_path": audio_path, "start": s, "end": e})
+                    all_results.append({"type": "background_ambience", "audio_path": audio_path, "start": s, "end": e, "sampling_rate": self.sampling_rate})
                 
                 all_results.sort(key=lambda x: x['start'])
                 
@@ -142,12 +149,12 @@ class VADSegment:
                     lengths = []
 
                     out_file = self.output_dir / f"{key}.jsonl"
-                    f = open(out_file, "w", encoding="utf-8")
+                    f = open(out_file, "wb")
                 
                 for results in all_results:
                     line = json.dumps(results, ensure_ascii=True) + "\n"
                     lengths.append(len(line.encode("utf-8")))
-                    f.write(line)
+                    f.write(line.encode("utf-8"))
 
         close_file()
 
@@ -160,12 +167,15 @@ def run():
     
     segmentor = VADSegment(
         rank=rank,
+        local_rank=int(os.environ.get("LOCAL_RANK", 0)),
         world_size=world_size,
         model_dir=model_args.vad_model_dir,
         audio_dir=data_args.audio_dir,
         output_dir=data_args.output_dir,
         batch_size=data_args.batch_size,
         sampling_rate=data_args.sampling_rate,
+        num_workers=data_args.num_workers,
+        device=data_args.device,
         threshold=model_args.threshold,
         min_silence_duration_ms=model_args.min_silence_duration_ms,
         min_speech_duration_ms=model_args.min_speech_duration_ms

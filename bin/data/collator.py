@@ -100,8 +100,8 @@ class DataCollatorForASR:
         """
         waveforms = [torch.as_tensor(f["waveform"], dtype=torch.float32) for f in features]
         srs = [torch.tensor(f["sr"], dtype=torch.long) for f in features]
-        starts = [torch.tensor(f["start"], dtype=torch.long) for f in features]
-        ends = [torch.tensor(f["end"], dtype=torch.long) for f in features]
+        starts = [torch.tensor(f["start"], dtype=torch.float64) for f in features]
+        ends = [torch.tensor(f["end"], dtype=torch.float64) for f in features]
 
         lengths = torch.tensor([len(w) for w in waveforms], dtype=torch.long)
         max_len = lengths.max().item()

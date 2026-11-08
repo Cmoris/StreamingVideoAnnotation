@@ -26,7 +26,7 @@ def readlastline(path: str):
         return f.readline()
     
 def read_data(path:Path):
-    with open(path, 'r') as f:
+    with open(path, 'r', encoding="utf-8") as f:
         lines = f.readlines()
         
     for line in lines[:-1]:
@@ -43,9 +43,6 @@ def merge_rank_jsonls(
         for seg in read_data(fp):
             segments.append(seg)
 
-    if len(segments) == 0:
-        raise RuntimeError("No segments to merge.")
-
     segments.sort(
         key=lambda x: (
             x.get(sort_key, 0.0),
@@ -57,23 +54,23 @@ def merge_rank_jsonls(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     lengths = []
-    with open(output_path, "w", encoding="utf-8") as f:
+    with open(output_path, "wb") as f:
         for seg in segments:
             line = json.dumps(seg, ensure_ascii=False) + "\n"
             lengths.append(len(line.encode("utf-8")))
-            f.write(line)
+            f.write(line.encode("utf-8"))
 
-        seeks = [0]
+        seeks = [0] if lengths else []
         for l in lengths[:-1]:
             seeks.append(seeks[-1] + l)
 
-        f.write(json.dumps(seeks, ensure_ascii=False))
+        f.write(json.dumps(seeks, ensure_ascii=False).encode("utf-8"))
 
     print(f"[OK] merged {len(rank_files)} files -> {output_path}")
     
 def merge_all_by_stem(data_dir: str, output_dir: str):
     output_dir = Path(output_dir)
-    Path.mkdir(output_dir, exist_ok=True)
+    Path.mkdir(output_dir, parents=True, exist_ok=True)
     
     data_dir = Path(data_dir)
     groups = defaultdict(list)
@@ -81,6 +78,8 @@ def merge_all_by_stem(data_dir: str, output_dir: str):
     for fp in data_dir.glob("*.rank*.jsonl"):
         stem = fp.name.split(".rank")[0]
         groups[stem].append(fp)
+    if not groups:
+        raise FileNotFoundError(f"No rank files found in {data_dir}")
         
     for stem, files in groups.items():
         merge_rank_jsonls(

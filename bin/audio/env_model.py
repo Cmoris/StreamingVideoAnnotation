@@ -36,6 +36,8 @@ class EnvDetect:
         if waveforms.dim() == 1:
             waveforms = waveforms.unsqueeze(0) # (1, T)
         waveforms = waveforms.to(self.device)
+        if waveforms.shape[-1] <= self.mel_transform.n_fft // 2:
+            return []
         
         # 1. 计算 Log-Mel 频谱 (模拟人耳感知)
         # (1, n_mels, n_frames)
@@ -71,7 +73,7 @@ class EnvDetect:
         
         # 转换为样本点 (Sample Index)
         # hop_length = 512
-        onset_samples = onset_frames * 512
+        onset_samples = (onset_frames + 1) * 512
         
         # 4. 矩阵化过滤：剔除落在人声区间的点
         valid_events = []
@@ -123,7 +125,7 @@ class EnvDetect:
         window_size = int(bg_window_sec * self.sampling_rate)
         step_size = window_size // 2 # 50% overlap
         windows = []
-        for start in range(0, total_samples - window_size, step_size):
+        for start in range(0, total_samples - window_size + 1, step_size):
             windows.append((start, start + window_size))
         return windows
     
@@ -132,7 +134,7 @@ class EnvDetect:
             
         raw_bg_segments = self.generate_background_windows(len(waveforms))
         
-        occupied_segments = speech_segments + env_segments
+        occupied_segments = self._merge_segments(speech_segments + env_segments)
         filtered_bg_segments = []
 
         for bg_s, bg_e in raw_bg_segments:

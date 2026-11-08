@@ -16,7 +16,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import torch
@@ -87,6 +87,47 @@ class _FakeProcessor:
 
 
 class DatasetCollatorTests(unittest.TestCase):
+    def test_raw_aac_uses_decoded_duration_and_sample_slices(self):
+        decoder = MagicMock()
+        decoder.probe.return_value = {
+            "streams": [{"codec_type": "audio", "sample_rate": "48000"}],
+            "format": {"duration": "1", "format_name": "aac"},
+        }
+        decoded = np.arange(48000, dtype=np.float32)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "disguised.mp4"
+            path.touch()
+            with patch.object(dataset_module, "ffmpeg", decoder), patch.object(
+                dataset_module, "_decode_raw_audio", return_value=decoded
+            ):
+                whole, _, _ = dataset_module.read_audio({"audio": str(path)})
+                clip, _, _ = dataset_module.read_audio(
+                    {"audio": str(path), "start": 2.0, "end": 2.5}
+                )
+        self.assertEqual(len(whole), 48000)
+        self.assertTrue(np.array_equal(clip.numpy(), decoded[32000:40000]))
+        decoder.input.assert_not_called()
+
+    def test_sample_bounds_use_resampled_timeline(self):
+        decoder = MagicMock()
+        decoder.probe.return_value = {
+            "streams": [{"codec_type": "audio", "sample_rate": "48000"}],
+            "format": {"duration": "10"},
+        }
+        stream = decoder.input.return_value
+        stream.filter.return_value = stream
+        stream.output.return_value = stream
+        stream.run.return_value = (np.zeros(16000, dtype=np.float32).tobytes(), b"")
+        with patch.object(dataset_module, "ffmpeg", decoder):
+            waveform, pts, sr = dataset_module.read_audio(
+                {"audio": "48khz.wav", "start": 16000, "end": 32000},
+                target_sr=16000, bounds_in_samples=True,
+            )
+        self.assertEqual(sr, 16000)
+        self.assertEqual(len(waveform), 16000)
+        self.assertEqual(pts[0], 1.0)
+        self.assertEqual(decoder.input.call_args.kwargs, {"ss": 1.0, "t": 1.0})
+
     def test_segment_dataset_with_audio_collator(self):
         with tempfile.TemporaryDirectory() as tmp:
             audio_dir = Path(tmp)
@@ -125,8 +166,23 @@ class DatasetCollatorTests(unittest.TestCase):
         self.assertEqual(tuple(batch["waveforms"].shape), (2, 7))
         self.assertEqual(batch["attention_mask"].sum(dim=1).tolist(), [4, 7])
         self.assertEqual(batch["type"], ["speech", "environment_event"])
-        self.assertEqual(batch["start"].tolist(), [0, 2])
-        self.assertEqual(batch["end"].tolist(), [4, 9])
+        self.assertEqual(batch["start"].tolist(), [0, 2 / 16000])
+        self.assertEqual(batch["end"].tolist(), [4 / 16000, 9 / 16000])
+
+    def test_timestamp_rate_is_independent_of_decoder_rate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            records = [{"audio_path": "a.wav", "type": "speech", "start": 8000,
+                        "end": 16000, "sampling_rate": 8000}]
+            _write_indexed_jsonl(root / "segments.jsonl", records)
+            _write_indexed_jsonl(root / "segments.rank0.jsonl", records)
+            with patch.object(dataset_module, "read_audio", side_effect=_fake_read_audio) as decoder:
+                dataset = AudioDatasetForASR(root, target_sr=16000)
+                self.assertEqual(len(dataset), 1)
+                item = dataset[0]
+                self.assertEqual((item["start"], item["end"]), (1.0, 2.0))
+                self.assertEqual(len(item["waveform"]), 16000)
+                self.assertEqual(decoder.call_args.args[0]["start"], 1.0)
 
     def test_caption_dataset_with_caption_collator(self):
         with tempfile.TemporaryDirectory() as tmp:
