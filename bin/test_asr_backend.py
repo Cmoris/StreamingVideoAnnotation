@@ -6,10 +6,22 @@ from unittest.mock import MagicMock
 import numpy as np
 import torch
 
-from audio.asr_model import WhisperASR
+from audio.asr_model import WhisperASR, normalize_language
 
 
 class WhisperTests(unittest.TestCase):
+    def test_language_names_and_codes_match_each_backend(self):
+        for value in ("Japanese", "japanese", " JAPANESE ", "ja"):
+            self.assertEqual(normalize_language(value, "whisper"), "ja")
+            self.assertEqual(normalize_language(value, "qwen3"), "Japanese")
+        for value, code in (("English", "en"), ("Chinese", "zh"), ("Korean", "ko")):
+            self.assertEqual(normalize_language(value, "whisper"), code)
+            self.assertEqual(normalize_language(code, "qwen3"), value)
+        for backend in ("whisper", "qwen3"):
+            self.assertIsNone(normalize_language(None, backend))
+            with self.assertRaises(ValueError):
+                normalize_language("Japenese", backend)
+
     def test_language_detection_does_not_depend_on_generated_prefix(self):
         backend = WhisperASR.__new__(WhisperASR)
         backend.language = None
@@ -35,7 +47,7 @@ class WhisperTests(unittest.TestCase):
         self.assertTrue(backend.model.generate.call_args.kwargs["return_timestamps"])
         self.assertEqual(tuple(backend.model.generate.call_args.kwargs["attention_mask"].shape), (1, 3100))
         backend.model.detect_language.reset_mock()
-        texts, languages = backend.transcribe([(np.zeros(16000), 16000)], languages=["ja"])
+        texts, languages = backend.transcribe([(np.zeros(16000), 16000)], languages=["Japanese"])
         backend.model.detect_language.assert_not_called()
         self.assertEqual(languages, ["ja"])
         self.assertEqual(backend.detect_language(np.zeros(16000)), "ja")

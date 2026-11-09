@@ -3,7 +3,25 @@ import librosa
 import numpy as np
 from typing import List, Tuple
 from transformers import WhisperProcessor, WhisperForConditionalGeneration, WhisperFeatureExtractor
+from transformers.models.whisper.tokenization_whisper import LANGUAGES, TO_LANGUAGE_CODE
 
+
+def normalize_language(language, backend):
+    """Accept English names or Whisper codes; adapt to each backend's API."""
+    if language is None:
+        return None
+    value = language.strip().lower()
+    # Qwen calls Tagalog "Filipino".
+    if value == "filipino":
+        value = "tl"
+    code = value if value in LANGUAGES else TO_LANGUAGE_CODE.get(value)
+    if code is None:
+        raise ValueError(f"Unknown language: {language!r}; use a name such as Japanese or a code such as ja")
+    if backend == "whisper":
+        return code
+    if backend == "qwen3":
+        return "Filipino" if code == "tl" else LANGUAGES[code].capitalize()
+    raise ValueError(f"Unknown ASR backend: {backend}")
 
 
 class WhisperASR:
@@ -13,7 +31,7 @@ class WhisperASR:
         language: str = None,
         device: str = "cuda",
     ):
-        self.language = language
+        self.language = normalize_language(language, "whisper")
 
         self.device = device
         self.dtype = torch.float32 if str(device).startswith("cpu") else torch.bfloat16
@@ -28,7 +46,7 @@ class WhisperASR:
         self.model.eval()
 
         self.model.generation_config.forced_decoder_ids = None
-        self.model.generation_config.language = language
+        self.model.generation_config.language = self.language
         self.model.generation_config.task = "transcribe"
 
     @torch.no_grad()
@@ -53,6 +71,7 @@ class WhisperASR:
         if languages is not None:
             if len(languages) != len(waves):
                 raise ValueError("Expected one language per input waveform")
+            languages = [normalize_language(value, "whisper") for value in languages]
         elif self.language:
             languages = [self.language] * len(waves)
         else:
@@ -93,6 +112,7 @@ class QwenASR:
                  model_name="Qwen/Qwen3-ASR-1.7B", 
                  language=None,
                  device="cuda:0"):
+        self.language = normalize_language(language, "qwen3")
         from qwen_asr import Qwen3ASRModel
         self.model = Qwen3ASRModel.from_pretrained(
             model_name,
@@ -103,7 +123,6 @@ class QwenASR:
             max_new_tokens=512,
         )
 
-        self.language = language
         
     def transcribe(self, audio: List[Tuple[np.ndarray, int]]) -> List[str]:
         results = self.model.transcribe(

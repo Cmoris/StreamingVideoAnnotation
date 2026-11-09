@@ -8,13 +8,14 @@ cd /d "%~dp0.."
 rem Edit these paths when changing the environment, audio, or model.
 set "PYTHON=C:\APP\Miniconda\envs\ASR\python.exe"
 set "FFMPEG_BIN=C:\APP\ffmpeg-2026-10-19-git-2344518cc5-essentials_build\bin"
-set "AUDIO=C:\Program_moris\NOGIZAKA\msg\group_56\audio\2026-07-30_17-35-26_169875.m4a"
+set "AUDIO=C:\IDOL\中西阿尔诺\video\noginono\乃木坂46のの_20261108_1800-1830.wav"
 set "MODEL=C:\Users\12060\.cache\huggingface\hub\models--openai--whisper-large-v3\snapshots\06f233fe06e710322aca913c1bc4249a0d71fce1"
+@REM  set "MODEL=C:\Users\12060\.cache\huggingface\hub\models--Qwen--Qwen3-ASR-1.7B\snapshots\7278e1e70fe206f11671096ffdd38061171dd6e5"
 set "DEVICE=cuda:0"
 set "FONTSIZE=40"
 set "PATH=%FFMPEG_BIN%;%PATH%"
 if defined INPUT_AUDIO set "AUDIO=%INPUT_AUDIO%"
-for %%F in ("%AUDIO%") do set "OUTPUT=%CD%\results\%%~nF"
+for %%F in ("%AUDIO%") do set "OUTPUT=%CD%\results_whisper\%%~nF"
 
 set "MODE=%~1"
 if "%MODE%"=="" set "MODE=all"
@@ -39,7 +40,8 @@ if /i "%MODE%"=="timestamps" goto done
 "%PYTHON%" bin\generate_transcripts.py ^
     --annotation-dir "%OUTPUT%\timestamps" ^
     --output-dir "%OUTPUT%\transcript_ranks" ^
-    --asr-backend whisper --asr-model-dir "%MODEL%" ^
+    --language "Japanese" ^
+    --asr-model-dir "%MODEL%" ^
     --batch-size 1 --num-workers 0 --device "%DEVICE%"
 if errorlevel 1 goto failed
 "%PYTHON%" bin\merge.py --data-dir "%OUTPUT%\transcript_ranks" --output-dir "%OUTPUT%\transcripts"

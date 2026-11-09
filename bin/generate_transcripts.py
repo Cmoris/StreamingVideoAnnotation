@@ -12,7 +12,7 @@ from data.utils import extract_bv_id_from_dir
 def add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument("--device", default=None)
     parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--language", default=None, help="Language hint; omit for automatic detection")
+    parser.add_argument("--language", default=None, help="Language name, e.g. Japanese (codes such as ja also accepted); omit for automatic detection")
     parser.add_argument("--asr-backend", choices=("whisper", "qwen3"), default=None)
     parser.add_argument(
         "--asr-model-dir",
