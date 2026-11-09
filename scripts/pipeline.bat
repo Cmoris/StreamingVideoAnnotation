@@ -8,7 +8,7 @@ cd /d "%~dp0.."
 rem Edit these paths when changing the environment, audio, or model.
 set "PYTHON=C:\APP\Miniconda\envs\ASR\python.exe"
 set "FFMPEG_BIN=C:\APP\ffmpeg-2026-10-19-git-2344518cc5-essentials_build\bin"
-set "AUDIO=C:\IDOL\中西阿尔诺\video\noginono\乃木坂46のの_20261108_1800-1830.wav"
+set "AUDIO=C:\Program_moris\NOGIZAKA\msg\group_56\audio\2026-07-30_17-35-26_169875.m4a"
 set "MODEL=C:\Users\12060\.cache\huggingface\hub\models--openai--whisper-large-v3\snapshots\06f233fe06e710322aca913c1bc4249a0d71fce1"
 set "DEVICE=cuda:0"
 set "FONTSIZE=40"
